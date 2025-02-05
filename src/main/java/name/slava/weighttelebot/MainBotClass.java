@@ -3,10 +3,15 @@ package name.slava.weighttelebot;
 import jakarta.annotation.PostConstruct;
 import name.slava.weighttelebot.model.UserData;
 import name.slava.weighttelebot.model.WeightEntry;
+import name.slava.weighttelebot.repository.UserDataRepository;
+import name.slava.weighttelebot.serivce.UserDataService;
+import name.slava.weighttelebot.serivce.UserDataServiceImpl;
 import org.knowm.xchart.BitmapEncoder;
 import org.knowm.xchart.XYChart;
 import org.knowm.xchart.XYChartBuilder;
 import org.knowm.xchart.style.markers.SeriesMarkers;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.TelegramBotsApi;
@@ -27,16 +32,18 @@ import java.util.stream.Collectors;
 
 @Service
 public class MainBotClass extends TelegramLongPollingBot {
+    private static final Logger logger = LoggerFactory.getLogger(MainBotClass.class);
+
     // Замените на свои значения (или берите из переменных окружения)
     private static final String BOT_USERNAME = System.getenv("BOT_USERNAME");
     private static final String BOT_TOKEN = System.getenv("BOT_TOKEN");
 
-    // Храним данные пользователей в памяти. (userId -> данные)
-    private static final Map<Long, UserData> userDataMap = new HashMap<>();
+    private final UserDataService userDataService;
 
     // Конструктор бота (можно оставить пустым, если всё нужное инициализируем статически)
-    public MainBotClass() {
+    public MainBotClass(UserDataService userDataService) {
         super();
+        this.userDataService = userDataService;
     }
 
     @Override
@@ -56,10 +63,10 @@ public class MainBotClass extends TelegramLongPollingBot {
     public void init() {
         try {
             TelegramBotsApi botsApi = new TelegramBotsApi(DefaultBotSession.class);
-            botsApi.registerBot(new MainBotClass());
-            System.out.println("Bot started successfully!");
+            botsApi.registerBot(new MainBotClass(userDataService));
+            logger.info("==============Bot started successfully!==============");
         } catch (TelegramApiException e) {
-            e.printStackTrace();
+            logger.error("Error while starting bot {}", e.getMessage());
         }
     }
 
@@ -113,7 +120,7 @@ public class MainBotClass extends TelegramLongPollingBot {
         try {
             execute(message);
         } catch (TelegramApiException e) {
-            e.printStackTrace();
+            logger.error("Error while sending message: {}", e.getMessage());
         }
     }
 
@@ -135,6 +142,7 @@ public class MainBotClass extends TelegramLongPollingBot {
     }
 
     private void handleSetWeight(long chatId, String text) {
+        logger.info("Setting weight for chatId: {}", chatId);
         // Формат: /setweight 70.5
         String[] parts = text.split("\\s+");
         if (parts.length < 2) {
@@ -145,9 +153,9 @@ public class MainBotClass extends TelegramLongPollingBot {
             double weight = Double.parseDouble(parts[1]);
 
             // Получаем или создаём UserData
-            UserData data = userDataMap.getOrDefault(chatId, new UserData());
+            UserData data = userDataService.getOrDefault(chatId, new UserData());
             data.getWeights().add(new WeightEntry(LocalDate.now(), weight));
-            userDataMap.put(chatId, data);
+            userDataService.put(chatId, data);
 
             sendTextMessage(chatId, "Вес " + weight + " кг сохранён.");
         } catch (NumberFormatException e) {
@@ -156,6 +164,7 @@ public class MainBotClass extends TelegramLongPollingBot {
     }
 
     private void handleSetTarget(long chatId, String text) {
+        logger.info("Setting target weight for chatId: {}", chatId);
         // Формат: /settarget 65.0
         String[] parts = text.split("\\s+");
         if (parts.length < 2) {
@@ -164,9 +173,9 @@ public class MainBotClass extends TelegramLongPollingBot {
         }
         try {
             double target = Double.parseDouble(parts[1]);
-            UserData data = userDataMap.getOrDefault(chatId, new UserData());
+            UserData data = userDataService.getOrDefault(chatId, new UserData());
             data.setTargetWeight(target);
-            userDataMap.put(chatId, data);
+            userDataService.put(chatId, data);
 
             sendTextMessage(chatId, "Целевой вес " + target + " кг установлен.");
         } catch (NumberFormatException e) {
@@ -175,7 +184,8 @@ public class MainBotClass extends TelegramLongPollingBot {
     }
 
     private void handleShowData(long chatId) {
-        UserData data = userDataMap.get(chatId);
+        logger.info("Showing data for chatId: {}", chatId);
+        UserData data = userDataService.get(chatId);
         if (data == null || data.getWeights().isEmpty()) {
             sendTextMessage(chatId, "Данных о весе ещё нет.");
             return;
@@ -197,7 +207,8 @@ public class MainBotClass extends TelegramLongPollingBot {
     }
 
     private void handleForecast(long chatId) {
-        UserData data = userDataMap.get(chatId);
+        logger.info("Calculating forecast for chatId: {}", chatId);
+        UserData data = userDataService.get(chatId);
         if (data == null || data.getWeights().size() < 2) {
             sendTextMessage(chatId, "Недостаточно данных для прогноза (нужно минимум 2 записи).");
             return;
@@ -217,7 +228,9 @@ public class MainBotClass extends TelegramLongPollingBot {
     }
 
     private void handleChart(long chatId) {
-        UserData data = userDataMap.get(chatId);
+        logger.info("Generating chart for chatId: {}", chatId);
+
+        UserData data = userDataService.get(chatId);
         if (data == null || data.getWeights().isEmpty()) {
             sendTextMessage(chatId, "Нет данных для построения графика.");
             return;
@@ -239,7 +252,7 @@ public class MainBotClass extends TelegramLongPollingBot {
         try {
             execute(sendPhoto);
         } catch (TelegramApiException e) {
-            e.printStackTrace();
+            logger.error("Error while sending chart: {}", e.getMessage());
             sendTextMessage(chatId, "Ошибка при отправке графика.");
         } finally {
             // Удалим временный файл (чтобы не копились)
@@ -258,7 +271,11 @@ public class MainBotClass extends TelegramLongPollingBot {
      * и экстраполируем до целевого веса.
      */
     private LocalDate calculateForecast(List<WeightEntry> weightEntries, double targetWeight) {
-        if (weightEntries.size() < 2) return null;
+        logger.info("Calculating forecast for {} entries, target weight: {}", weightEntries.size(), targetWeight);
+
+        if (weightEntries.size() < 2) {
+            return null;
+        }
 
         // Сортируем по дате
         List<WeightEntry> sorted = weightEntries.stream()
@@ -307,6 +324,7 @@ public class MainBotClass extends TelegramLongPollingBot {
      * В реальном проекте стоит аккуратнее работать с временными файлами (директория, имена и т.д.).
      */
     private File generateChart(List<WeightEntry> weightEntries) {
+        logger.info("Generating chart for {} entries", weightEntries.size());
         try {
             // Сортируем по дате
             List<WeightEntry> sorted = weightEntries.stream()
@@ -340,7 +358,7 @@ public class MainBotClass extends TelegramLongPollingBot {
 
             return file;
         } catch (IOException e) {
-            e.printStackTrace();
+            logger.error("Error while generating chart: {}", e.getMessage());
             return null;
         }
     }
