@@ -1,8 +1,8 @@
 # ========================
 # 1-й этап: Сборка кода
 # ========================
-FROM maven:3.8.7-eclipse-temurin-17 AS build
-
+FROM maven:3.9.9-eclipse-temurin-21 AS build
+RUN apt-get update && apt-get upgrade -y
 # Создадим директорию для проекта
 WORKDIR /app
 
@@ -19,7 +19,7 @@ RUN mvn clean package -DskipTests
 # ========================
 # 2-й этап: Финальный образ
 # ========================
-FROM eclipse-temurin:17
+FROM eclipse-temurin:21
 WORKDIR /app
 
 # Копируем jar из предыдущего этапа
@@ -27,8 +27,8 @@ COPY --from=build /app/target/*.jar /app/bot.jar
 
 # Устанавливаем значения по умолчанию для переменных
 # (при необходимости переопределяются на этапе "docker run")
-ENV BOT_USERNAME="CHANGE_ME_USERNAME"
-ENV BOT_TOKEN="CHANGE_ME_TOKEN"
+ENV BOT_USERNAME=SlavaWeightBot
+ENV BOT_TOKEN=7884083667:AAGnOBEGckihW3GslxbpqGbp1ibAVRHQfKM
 
 # Запускаем бот
 ENTRYPOINT ["java", "-jar", "/app/bot.jar"]
