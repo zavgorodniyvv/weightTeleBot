@@ -12,6 +12,7 @@ import java.util.Objects;
 public class UserData {
     @Id
     private String id;
+    private Long chatId;
     private Double targetWeight;
     private List<WeightEntry> weights;
 
@@ -39,22 +40,32 @@ public class UserData {
         return id;
     }
 
+
+    public Long getChatId() {
+        return chatId;
+    }
+
+    public void setChatId(Long chatId) {
+        this.chatId = chatId;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (o == null || getClass() != o.getClass()) return false;
         UserData userData = (UserData) o;
-        return Objects.equals(id, userData.id) && Objects.equals(targetWeight, userData.targetWeight) && Objects.equals(weights, userData.weights);
+        return Objects.equals(id, userData.id) && Objects.equals(chatId, userData.chatId) && Objects.equals(targetWeight, userData.targetWeight) && Objects.equals(weights, userData.weights);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, targetWeight, weights);
+        return Objects.hash(id, chatId, targetWeight, weights);
     }
 
     @Override
     public String toString() {
         return "UserData{" +
                 "id='" + id + '\'' +
+                ", chatId=" + chatId +
                 ", targetWeight=" + targetWeight +
                 ", weights=" + weights +
                 '}';
