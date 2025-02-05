@@ -27,8 +27,8 @@ COPY --from=build /app/target/*.jar /app/bot.jar
 
 # Устанавливаем значения по умолчанию для переменных
 # (при необходимости переопределяются на этапе "docker run")
-ENV BOT_USERNAME=SlavaWeightBot
-ENV BOT_TOKEN=7884083667:AAGnOBEGckihW3GslxbpqGbp1ibAVRHQfKM
+ENV BOT_USERNAME=1
+ENV BOT_TOKEN=2
 
 # Запускаем бот
 ENTRYPOINT ["java", "-jar", "/app/bot.jar"]
