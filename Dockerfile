@@ -30,6 +30,6 @@ COPY --from=build /app/target/*.jar /app/bot.jar
 ENV BOT_USERNAME=1
 ENV BOT_TOKEN=2
 
-EXPOSE 8080
+EXPOSE 10000
 # Запускаем бот
 ENTRYPOINT ["java", "-jar", "/app/bot.jar"]
