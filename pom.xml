@@ -63,6 +63,10 @@
             <artifactId>xchart</artifactId>
             <version>3.8.3</version> <!-- Уточните актуальную версию на GitHub -->
         </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
     </dependencies>
 
     <build>
