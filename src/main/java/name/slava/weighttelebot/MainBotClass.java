@@ -3,13 +3,9 @@ package name.slava.weighttelebot;
 import jakarta.annotation.PostConstruct;
 import name.slava.weighttelebot.model.UserData;
 import name.slava.weighttelebot.model.WeightEntry;
-import name.slava.weighttelebot.repository.UserDataRepository;
+import name.slava.weighttelebot.serivce.ChartGenerator;
+import name.slava.weighttelebot.serivce.ForecastService;
 import name.slava.weighttelebot.serivce.UserDataService;
-import name.slava.weighttelebot.serivce.UserDataServiceImpl;
-import org.knowm.xchart.BitmapEncoder;
-import org.knowm.xchart.XYChart;
-import org.knowm.xchart.XYChartBuilder;
-import org.knowm.xchart.style.markers.SeriesMarkers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -24,11 +20,9 @@ import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
 
 import java.io.File;
-import java.io.IOException;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.stream.Collectors;
 
 @Service
 public class MainBotClass extends TelegramLongPollingBot {
@@ -39,11 +33,15 @@ public class MainBotClass extends TelegramLongPollingBot {
     private static final String BOT_TOKEN = System.getenv("BOT_TOKEN");
 
     private final UserDataService userDataService;
+    private final ForecastService forecastService;
+    private final ChartGenerator chartGenerator;
 
     // Конструктор бота (можно оставить пустым, если всё нужное инициализируем статически)
-    public MainBotClass(UserDataService userDataService) {
+    public MainBotClass(UserDataService userDataService, ForecastService forecastService, ChartGenerator chartGenerator) {
         super();
         this.userDataService = userDataService;
+        this.forecastService = forecastService;
+        this.chartGenerator = chartGenerator;
     }
 
     @Override
@@ -63,7 +61,7 @@ public class MainBotClass extends TelegramLongPollingBot {
     public void init() {
         try {
             TelegramBotsApi botsApi = new TelegramBotsApi(DefaultBotSession.class);
-            botsApi.registerBot(new MainBotClass(userDataService));
+            botsApi.registerBot(new MainBotClass(userDataService, forecastService, chartGenerator));
             logger.info("==============Bot started successfully!==============");
         } catch (TelegramApiException e) {
             logger.error("Error while starting bot {}", e.getMessage());
@@ -265,102 +263,19 @@ public class MainBotClass extends TelegramLongPollingBot {
     // --------------------------------
     // Логика прогноза
     // --------------------------------
-
-    /**
-     * Простейший прогноз: считаем среднюю скорость изменения (кг/день)
-     * и экстраполируем до целевого веса.
-     */
     private LocalDate calculateForecast(List<WeightEntry> weightEntries, double targetWeight) {
-        logger.info("Calculating forecast for {} entries, target weight: {}", weightEntries.size(), targetWeight);
-
-        if (weightEntries.size() < 2) {
-            return null;
-        }
-
-        // Сортируем по дате
-        List<WeightEntry> sorted = weightEntries.stream()
-                .sorted(Comparator.comparing(WeightEntry::getDate))
-                .collect(Collectors.toList());
-
-        WeightEntry first = sorted.get(0);
-        WeightEntry last = sorted.get(sorted.size() - 1);
-
-        // Кол-во дней между первой и последней записью
-        long daysBetween = java.time.temporal.ChronoUnit.DAYS.between(first.getDate(), last.getDate());
-        if (daysBetween == 0) return null; // все записи в один день - нет динамики
-
-        double weightDiff = last.getWeight() - first.getWeight();
-        double dailyChange = weightDiff / daysBetween;
-
-        // если dailyChange == 0, прогноз не имеет смысла (вес не меняется)
-        if (Math.abs(dailyChange) < 1e-9) {
-            return null;
-        }
-
-        // Насколько нужно изменить вес от последней записи до цели
-        double diffToTarget = targetWeight - last.getWeight();
-
-        // Примерное кол-во дней, чтобы дойти до цели
-        double daysToTarget = diffToTarget / dailyChange;
-
-        // Округлим до целых, но можно и более точно
-        long daysRounded = Math.round(daysToTarget);
-
-        // Если при подсчёте получилось, что идти будем назад (например, dailyChange положительный, а нам надо похудеть),
-        // то daysRounded может выйти отрицательным. Можно добавить проверку, если нужно.
-        // Но пока оставим как есть.
-
-        // Прогноз - от последней даты:
-        LocalDate forecastDate = last.getDate().plusDays(daysRounded);
-        return forecastDate;
+        return forecastService.calculateForecast(weightEntries, targetWeight);
     }
+
 
     // --------------------------------
     // Генерация графика (через XChart)
     // --------------------------------
-
     /**
      * Генерирует PNG-файл с графиком и возвращает путь к нему.
-     * В реальном проекте стоит аккуратнее работать с временными файлами (директория, имена и т.д.).
      */
     private File generateChart(List<WeightEntry> weightEntries) {
-        logger.info("Generating chart for {} entries", weightEntries.size());
-        try {
-            // Сортируем по дате
-            List<WeightEntry> sorted = weightEntries.stream()
-                    .sorted(Comparator.comparing(WeightEntry::getDate))
-                    .collect(Collectors.toList());
-
-            // Для xData используем число дней (toEpochDay())
-            List<Double> xData = sorted.stream()
-                    .map(entry -> (double) entry.getDate().toEpochDay())
-                    .collect(Collectors.toList());
-
-            // Для yData - сам вес
-            List<Double> yData = sorted.stream()
-                    .map(WeightEntry::getWeight)
-                    .collect(Collectors.toList());
-
-            XYChart chart = new XYChartBuilder()
-                    .width(800)
-                    .height(600)
-                    .title("Динамика веса")
-                    .xAxisTitle("Дата (EpochDay)")
-                    .yAxisTitle("Вес (кг)")
-                    .build();
-
-            // Добавляем серию
-            chart.addSeries("Вес", xData, yData).setMarker(SeriesMarkers.CIRCLE);
-
-            // Сохраняем во временный файл
-            File file = File.createTempFile("weight_chart_", ".png");
-            BitmapEncoder.saveBitmap(chart, file.getAbsolutePath(), BitmapEncoder.BitmapFormat.PNG);
-
-            return file;
-        } catch (IOException e) {
-            logger.error("Error while generating chart: {}", e.getMessage());
-            return null;
-        }
+        return chartGenerator.generateChart(weightEntries);
     }
 
 }
