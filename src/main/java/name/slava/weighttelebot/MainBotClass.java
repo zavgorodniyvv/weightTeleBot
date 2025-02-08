@@ -1,6 +1,7 @@
 package name.slava.weighttelebot;
 
 import jakarta.annotation.PostConstruct;
+import name.slava.weighttelebot.enums.BotState;
 import name.slava.weighttelebot.model.UserData;
 import name.slava.weighttelebot.model.WeightEntry;
 import name.slava.weighttelebot.serivce.ChartGenerator;
@@ -11,11 +12,19 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.TelegramBotsApi;
+import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.send.SendPhoto;
 import org.telegram.telegrambots.meta.api.objects.InputFile;
 import org.telegram.telegrambots.meta.api.objects.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
+import org.telegram.telegrambots.meta.api.objects.commands.BotCommand;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboard;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
 
@@ -31,6 +40,8 @@ public class MainBotClass extends TelegramLongPollingBot {
     // Замените на свои значения (или берите из переменных окружения)
     private static final String BOT_USERNAME = System.getenv("BOT_USERNAME");
     private static final String BOT_TOKEN = System.getenv("BOT_TOKEN");
+
+    private final Map<Long, BotState> userStates = new HashMap<>();
 
     private final UserDataService userDataService;
     private final ForecastService forecastService;
@@ -66,6 +77,22 @@ public class MainBotClass extends TelegramLongPollingBot {
         } catch (TelegramApiException e) {
             logger.error("Error while starting bot {}", e.getMessage());
         }
+        List<BotCommand> commands = List.of(
+                new BotCommand("/start", "Начать работу"),
+                new BotCommand("/setweight", "Установить текущий вес"),
+                new BotCommand("/settarget", "Установить целевой вес"),
+                new BotCommand("/showdata", "Показать данные"),
+                new BotCommand("/forecast", "Получить прогноз"),
+                new BotCommand("/chart", "Получить график")
+        );
+        SetMyCommands setMyCommands = new SetMyCommands();
+        setMyCommands.setCommands(commands);
+        try{
+            execute(setMyCommands);
+            logger.info("Commands set successfully");
+        } catch (TelegramApiException e) {
+            logger.error("Error while setting commands: {}", e.getMessage());
+        }
     }
 
     /**
@@ -77,6 +104,13 @@ public class MainBotClass extends TelegramLongPollingBot {
         // Проверяем, что апдейт содержит сообщение
         if (update.hasMessage()) {
             Message message = update.getMessage();
+
+            var userState = userStates.getOrDefault(message.getChatId(), BotState.IDLE);
+
+            if(userState == BotState.WAITING_WEIGHT){
+                handleSetWeightOnButtonClick(message.getChatId(), message.getText());
+                return;
+            }
 
             // Проверяем, что это текст
             if (message.hasText()) {
@@ -98,6 +132,11 @@ public class MainBotClass extends TelegramLongPollingBot {
                     handleForecast(chatId);
                 } else if (text.startsWith("/chart")) {
                     handleChart(chatId);
+                } else if (text.startsWith("Show data")) {
+                    handleShowData(chatId);
+                } else if (text.startsWith("Set weight")) {
+                    userStates.put(chatId, BotState.WAITING_WEIGHT);
+                    sendTextMessage(chatId, "Введите ваш вес:");
                 } else {
                     // Если нужно - обрабатываем произвольный текст
                     sendTextMessage(chatId, "Неизвестная команда. Попробуйте /start");
@@ -108,6 +147,23 @@ public class MainBotClass extends TelegramLongPollingBot {
         // Можно также проверять наличие CallbackQuery (кнопок), фото и т.д., если нужно.
     }
 
+    private void handleSetWeightOnButtonClick(Long chatId, String text) {
+        try{
+            double weight = Double.parseDouble(text);
+
+            UserData data = userDataService.getOrDefault(chatId, new UserData());
+            data.getWeights().add(new WeightEntry(LocalDate.now(), weight));
+            userDataService.put(chatId, data);
+
+            sendTextMessage(chatId, "Вес " + weight + " кг сохранён.");
+
+            userStates.put(chatId, BotState.IDLE);
+        } catch (NumberFormatException e){
+            sendTextMessage(chatId, "Некорректный формат числа. Пример: 75.3");
+        }
+
+    }
+
     /**
      * Отправка текстового сообщения пользователю.
      */
@@ -115,11 +171,54 @@ public class MainBotClass extends TelegramLongPollingBot {
         SendMessage message = new SendMessage();
         message.setChatId(String.valueOf(chatId));
         message.setText(text);
+        message.setReplyMarkup(getReplyButtons(chatId));
+//        message.setReplyMarkup(getInlineButtons(chatId));
         try {
             execute(message);
         } catch (TelegramApiException e) {
             logger.error("Error while sending message: {}", e.getMessage());
         }
+    }
+
+    private ReplyKeyboard getInlineButtons(long chatId) {
+        // Создаём кнопку
+        InlineKeyboardButton button = new InlineKeyboardButton();
+        button.setText("Нажми меня!");
+        button.setCallbackData("BUTTON_HELLO_CALLBACK");
+
+        // Один ряд кнопок
+        List<InlineKeyboardButton> row = new ArrayList<>();
+        row.add(button);
+
+        // Список рядов (каждый ряд – список кнопок)
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        rows.add(row);
+
+        // Создаём объект разметки
+        InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup();
+        inlineKeyboardMarkup.setKeyboard(rows);
+        return inlineKeyboardMarkup;
+    }
+
+
+    private ReplyKeyboard getReplyButtons(long chatId) {
+        // Создаём объект клавиатуры
+        ReplyKeyboardMarkup keyboardMarkup = new ReplyKeyboardMarkup();
+        keyboardMarkup.setResizeKeyboard(true); // Клавиатура будет подстраиваться по высоте
+        keyboardMarkup.setSelective(true); // Отображать клавиатуру только нужным пользователям (в группах)
+
+        // Создаём кнопки
+        KeyboardRow row1 = new KeyboardRow();
+        row1.add(new KeyboardButton("Set weight"));
+        row1.add(new KeyboardButton("Show data"));
+
+        // Собираем список строк
+        List<KeyboardRow> keyboardRows = new ArrayList<>();
+        keyboardRows.add(row1);
+
+        // Устанавливаем клавиатуру
+        keyboardMarkup.setKeyboard(keyboardRows);
+        return keyboardMarkup;
     }
 
     // --------------------------------
@@ -138,6 +237,8 @@ public class MainBotClass extends TelegramLongPollingBot {
 
         sendTextMessage(chatId, sb.toString());
     }
+
+
 
     private void handleSetWeight(long chatId, String text) {
         logger.info("Setting weight for chatId: {}", chatId);
