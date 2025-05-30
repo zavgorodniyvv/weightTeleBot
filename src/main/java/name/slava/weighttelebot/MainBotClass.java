@@ -159,9 +159,9 @@ public class MainBotClass extends TelegramLongPollingBot {
             long chatId = update.getCallbackQuery().getMessage().getChatId();
             String data = update.getCallbackQuery().getData();
             if (data.startsWith("edit:")) {
-                String[] parts = data.split(":");
-                String date = parts[1];
-                userDates.put(chatId, date);
+                String[] parts = data.split("::");
+                String date = parts[2];
+                userDates.put(chatId, data);
                 userStates.put(chatId, BotState.WAITING_NEW_WEIGHT);
                 sendTextMessage(chatId, "Введите новый вес для даты " + date + ":");
             }
@@ -182,22 +182,27 @@ public class MainBotClass extends TelegramLongPollingBot {
 
         try {
             double weight = Double.parseDouble(text);
-            UserData data = userDataService.get(chatId);
-            if(data == null){
+            UserData userData = userDataService.get(chatId);
+            if(userData == null){
                 sendTextMessage(chatId, "Нет данных для редактирования.");
                 return;
             }
-            String localDate = LocalDate.parse(userDates.get(chatId), DateTimeFormatter.ofPattern("yyyy-MM-dd")).toString();
-            List<WeightEntry> weights = data.getWeights();
+            String data = userDates.get(chatId);
+            var dataParts = data.split("::");
+
+            String localDate = dataParts[2];
+            String id = dataParts[1];
+
+            List<WeightEntry> weights = userData.getWeights();
             for (WeightEntry entry : weights) {
-                String entryDate = entry.getDate().toString();
-                if (entryDate.equals(localDate)) {
+                String entryId = entry.getId();
+                if (entryId.equals(id)) {
                     entry.setWeight(weight);
                     sendTextMessage(chatId, "Вес для даты " + localDate + " изменён на " + weight + " кг.");
                     break;
                 }
             }
-            userDataService.put(chatId, data);
+            userDataService.put(chatId, userData);
         } catch (NumberFormatException e) {
             sendTextMessage(chatId, "Некорректный формат числа. Пример: 75.3");
         }
@@ -228,7 +233,7 @@ public class MainBotClass extends TelegramLongPollingBot {
             List<InlineKeyboardButton> row = new ArrayList<>();
             InlineKeyboardButton button = new InlineKeyboardButton();
             button.setText(entry.getDate() +  " -> " + entry.getWeight());
-            button.setCallbackData("edit:" + entry.getDate() + "::" + entry.getWeight());
+            button.setCallbackData("edit::" + entry.getId() + "::" + entry.getDate() + "::" + entry.getWeight());
             row.add(button);
             rows.add(row);
         });
