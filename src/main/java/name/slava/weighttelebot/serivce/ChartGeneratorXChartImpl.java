@@ -1,27 +1,26 @@
 package name.slava.weighttelebot.serivce;
 
-import name.slava.weighttelebot.MainBotClass;
 import name.slava.weighttelebot.model.WeightEntry;
 import org.knowm.xchart.BitmapEncoder;
 import org.knowm.xchart.XYChart;
 import org.knowm.xchart.XYChartBuilder;
 import org.knowm.xchart.style.markers.SeriesMarkers;
+import org.knowm.xchart.style.Styler;
+import org.knowm.xchart.internal.chartpart.Axis;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.io.File;
 import java.io.IOException;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Collectors;
 
-// --------------------------------
-// Chart generation (using XChart)
-// --------------------------------
-
 /**
- * Generates a PNG file with the chart and returns its path.
+ * Генерирует PNG-файл с графиком и возвращает его путь.
  */
 @Service
 public class ChartGeneratorXChartImpl implements ChartGenerator {
@@ -31,33 +30,51 @@ public class ChartGeneratorXChartImpl implements ChartGenerator {
     public File generateChart(List<WeightEntry> weightEntries) {
         logger.info("Generating chart for {} entries", weightEntries.size());
         try {
-            // Sort by date
+            // Сортируем по дате
             List<WeightEntry> sorted = weightEntries.stream()
                     .sorted(Comparator.comparing(WeightEntry::getDate))
                     .collect(Collectors.toList());
 
-            // For xData, use the number of days (toEpochDay())
-            List<Double> xData = sorted.stream()
-                    .map(entry -> (double) entry.getDate().toEpochDay())
-                    .collect(Collectors.toList());
+            // xData — индексы (позиция точки), yData — значения веса
+            List<Double> xData = new java.util.ArrayList<>();
+            List<Double> yData = new java.util.ArrayList<>();
+            List<String> xLabels = new java.util.ArrayList<>();
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd.MM.yy");
 
-            // For yData - the weight itself
-            List<Double> yData = sorted.stream()
-                    .map(WeightEntry::getWeight)
-                    .collect(Collectors.toList());
+            for (int i = 0; i < sorted.size(); i++) {
+                WeightEntry entry = sorted.get(i);
+                xData.add((double)i);
+                yData.add(entry.getWeight());
+                xLabels.add(entry.getDate().format(formatter));
+            }
 
             XYChart chart = new XYChartBuilder()
                     .width(800)
                     .height(600)
                     .title("Weight Dynamics")
-                    .xAxisTitle("Date (EpochDay)")
+                    .xAxisTitle("Date")
                     .yAxisTitle("Weight (kg)")
                     .build();
 
-            // Add series
+            chart.getStyler().setAxisTitleFont(new java.awt.Font("Arial", java.awt.Font.PLAIN, 16));
+            chart.getStyler().setAxisTickLabelsFont(new java.awt.Font("Arial", java.awt.Font.PLAIN, 12));
+            chart.getStyler().setXAxisLabelRotation(45); // Повернуть подписи дат для читаемости
+            chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
+
+            // Добавляем серию
             chart.addSeries("Weight", xData, yData).setMarker(SeriesMarkers.CIRCLE);
 
-            // Save to a temporary file
+            // Устанавливаем кастомные подписи оси X для дат
+            chart.setCustomXAxisTickLabelsFormatter(x -> {
+                int idx = x.intValue();
+                if (idx >= 0 && idx < xLabels.size()) {
+                    return xLabels.get(idx);
+                } else {
+                    return "";
+                }
+            });
+
+            // Сохраняем во временный файл
             File file = File.createTempFile("weight_chart_", ".png");
             BitmapEncoder.saveBitmap(chart, file.getAbsolutePath(), BitmapEncoder.BitmapFormat.PNG);
 
