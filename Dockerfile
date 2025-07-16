@@ -29,6 +29,7 @@ COPY --from=build /app/target/*.jar /app/bot.jar
 # (при необходимости переопределяются на этапе "docker run")
 ENV BOT_USERNAME=1
 ENV BOT_TOKEN=2
+ENV MONGODB_URI=3
 
 EXPOSE 10000
 # Запускаем бот
