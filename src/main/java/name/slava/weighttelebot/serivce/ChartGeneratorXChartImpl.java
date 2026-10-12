@@ -27,7 +27,7 @@ public class ChartGeneratorXChartImpl implements ChartGenerator {
     private static final Logger logger = LoggerFactory.getLogger(ChartGeneratorXChartImpl.class);
 
     @Override
-    public File generateChart(List<WeightEntry> weightEntries) {
+    public File generateChart(List<WeightEntry> weightEntries, LocalDate from, LocalDate to) {
         logger.info("Generating chart for {} entries", weightEntries.size());
         try {
             // Сортируем по дате
@@ -35,17 +35,14 @@ public class ChartGeneratorXChartImpl implements ChartGenerator {
                     .sorted(Comparator.comparing(WeightEntry::getDate))
                     .collect(Collectors.toList());
 
-            // xData — индексы (позиция точки), yData — значения веса
+            // xData — номер дня (epoch day), чтобы расстояние между точками соответствовало прошедшему времени
             List<Double> xData = new java.util.ArrayList<>();
             List<Double> yData = new java.util.ArrayList<>();
-            List<String> xLabels = new java.util.ArrayList<>();
             DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd.MM.yy");
 
-            for (int i = 0; i < sorted.size(); i++) {
-                WeightEntry entry = sorted.get(i);
-                xData.add((double)i);
+            for (WeightEntry entry : sorted) {
+                xData.add((double) entry.getDate().toEpochDay());
                 yData.add(entry.getWeight());
-                xLabels.add(entry.getDate().format(formatter));
             }
 
             XYChart chart = new XYChartBuilder()
@@ -64,14 +61,18 @@ public class ChartGeneratorXChartImpl implements ChartGenerator {
             // Добавляем серию
             chart.addSeries("Weight", xData, yData).setMarker(SeriesMarkers.CIRCLE);
 
-            // Устанавливаем кастомные подписи оси X для дат
+            if (from != null && to != null) {
+                chart.getStyler().setXAxisMin((double) from.toEpochDay());
+                chart.getStyler().setXAxisMax((double) to.toEpochDay());
+            }
+
+            // Подписи оси X: дата для целых дней, дробные деления оставляем без подписи
             chart.setCustomXAxisTickLabelsFormatter(x -> {
-                int idx = x.intValue();
-                if (idx >= 0 && idx < xLabels.size()) {
-                    return xLabels.get(idx);
-                } else {
+                double day = Math.rint(x);
+                if (Math.abs(x - day) > 1e-6) {
                     return "";
                 }
+                return LocalDate.ofEpochDay((long) day).format(formatter);
             });
 
             // Сохраняем во временный файл
