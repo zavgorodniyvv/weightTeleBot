@@ -2,6 +2,7 @@ package name.slava.weighttelebot;
 
 import jakarta.annotation.PostConstruct;
 import name.slava.weighttelebot.enums.BotState;
+import name.slava.weighttelebot.enums.ChartPeriod;
 import name.slava.weighttelebot.model.UserData;
 import name.slava.weighttelebot.model.WeightEntry;
 import name.slava.weighttelebot.serivce.ChartGenerator;
@@ -12,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.TelegramBotsApi;
+import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
 import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.send.SendPhoto;
@@ -158,7 +160,10 @@ public class MainBotClass extends TelegramLongPollingBot {
         if (update.hasCallbackQuery()) {
             long chatId = update.getCallbackQuery().getMessage().getChatId();
             String data = update.getCallbackQuery().getData();
-            if (data.startsWith("edit:")) {
+            answerCallbackQuery(update.getCallbackQuery().getId());
+            if (data.startsWith("chart::")) {
+                handleChartPeriod(chatId, data.split("::")[1]);
+            } else if (data.startsWith("edit:")) {
                 String[] parts = data.split("::");
                 String date = parts[2];
                 userDates.put(chatId, data);
@@ -447,7 +452,33 @@ public class MainBotClass extends TelegramLongPollingBot {
     }
 
     private void handleChart(long chatId) {
-        logger.info("Generating chart for chatId: {}", chatId);
+        sendTextMessage(chatId, "Выберите период для графика:", getChartPeriodButtons());
+    }
+
+    private InlineKeyboardMarkup getChartPeriodButtons() {
+        List<InlineKeyboardButton> row1 = new ArrayList<>();
+        List<InlineKeyboardButton> row2 = new ArrayList<>();
+        for (ChartPeriod period : ChartPeriod.values()) {
+            InlineKeyboardButton button = new InlineKeyboardButton();
+            button.setText(period.getLabel());
+            button.setCallbackData("chart::" + period.name());
+            (row1.size() < 2 ? row1 : row2).add(button);
+        }
+
+        InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup();
+        inlineKeyboardMarkup.setKeyboard(List.of(row1, row2));
+        return inlineKeyboardMarkup;
+    }
+
+    private void handleChartPeriod(long chatId, String periodName) {
+        ChartPeriod period;
+        try {
+            period = ChartPeriod.valueOf(periodName);
+        } catch (IllegalArgumentException e) {
+            logger.warn("Unknown chart period: {}", periodName);
+            return;
+        }
+        logger.info("Generating chart for chatId: {}, period: {}", chatId, period);
 
         UserData data = userDataService.get(chatId);
         if (data == null || data.getWeights().isEmpty()) {
@@ -455,8 +486,18 @@ public class MainBotClass extends TelegramLongPollingBot {
             return;
         }
 
+        LocalDate today = LocalDate.now();
+        LocalDate from = period.startDate(today);
+        List<WeightEntry> entries = data.getWeights().stream()
+                .filter(entry -> from == null || !entry.getDate().isBefore(from))
+                .toList();
+        if (entries.isEmpty()) {
+            sendTextMessage(chatId, "Нет данных за период \"" + period.getLabel() + "\".", getChartPeriodButtons());
+            return;
+        }
+
         // Генерируем картинку
-        File chartFile = generateChart(data.getWeights());
+        File chartFile = generateChart(entries, from, from == null ? null : today);
         if (chartFile == null) {
             sendTextMessage(chatId, "Ошибка при генерации графика.");
             return;
@@ -466,7 +507,8 @@ public class MainBotClass extends TelegramLongPollingBot {
         SendPhoto sendPhoto = new SendPhoto();
         sendPhoto.setChatId(String.valueOf(chatId));
         sendPhoto.setPhoto(new InputFile(chartFile));
-        sendPhoto.setCaption("График веса");
+        sendPhoto.setCaption("График веса: " + period.getLabel());
+        sendPhoto.setReplyMarkup(getChartPeriodButtons());
 
         try {
             execute(sendPhoto);
@@ -478,6 +520,14 @@ public class MainBotClass extends TelegramLongPollingBot {
             if (chartFile.exists()) {
                 chartFile.delete();
             }
+        }
+    }
+
+    private void answerCallbackQuery(String callbackQueryId) {
+        try {
+            execute(new AnswerCallbackQuery(callbackQueryId));
+        } catch (TelegramApiException e) {
+            logger.error("Error while answering callback query: {}", e.getMessage());
         }
     }
 
@@ -495,8 +545,8 @@ public class MainBotClass extends TelegramLongPollingBot {
     /**
      * Генерирует PNG-файл с графиком и возвращает путь к нему.
      */
-    private File generateChart(List<WeightEntry> weightEntries) {
-        return chartGenerator.generateChart(weightEntries);
+    private File generateChart(List<WeightEntry> weightEntries, LocalDate from, LocalDate to) {
+        return chartGenerator.generateChart(weightEntries, from, to);
     }
 
 }
