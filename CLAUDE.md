@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Telegram bot for weight tracking (Spring Boot 3.4, Java 21, Maven, MongoDB). Users log weight entries, set a target weight, view history, edit recent entries, get a PNG chart (XChart) and a forecast date for reaching the target. All user-facing bot text is in Russian.
+Telegram bot for weight tracking (Spring Boot 4.1, Java 25, Maven, MongoDB, telegrambots 10.x long polling). Users log weight entries, set a target weight, view history, edit recent entries, get a PNG chart (XChart) and a forecast date for reaching the target. All user-facing bot text is in Russian.
 
 ## Commands
 
@@ -14,12 +14,12 @@ mvn test                                # run tests
 mvn test -Dtest=WeightTeleBotApplicationTests              # single test class
 mvn test -Dtest=WeightTeleBotApplicationTests#contextLoads   # single test method
 mvn spring-boot:run                     # run locally
-docker build -t weighttelebot . && docker run -e BOT_USERNAME=... -e BOT_TOKEN=... -e MONGODB_URI=... weighttelebot
+docker build -t weighttelebot . && docker run -e BOT_TOKEN=... -e MONGODB_URI=... weighttelebot
 ```
 
 `mvnw` is committed but `.mvn/wrapper/` is not, so the wrapper does not work — use a system `mvn`.
 
-Required environment variables: `BOT_USERNAME`, `BOT_TOKEN` (read directly via `System.getenv` in `MainBotClass`, not via Spring properties) and `MONGODB_URI` (resolved through `spring.data.mongodb.uri=${MONGODB_URI}`). The only test is a `@SpringBootTest` context-load test, so it needs `MONGODB_URI` set and will also try to register the bot with Telegram on startup.
+Required environment variables: `BOT_TOKEN` (read directly via `System.getenv` in `MainBotClass`, not via Spring properties) and `MONGODB_URI` (resolved through `spring.mongodb.uri=${MONGODB_URI}` — Spring Boot 4 renamed it from `spring.data.mongodb.uri` and no longer reads the old name). `BOT_USERNAME` is no longer used. The only test is a `@SpringBootTest` context-load test, so it needs `MONGODB_URI` set and will also try to register the bot with Telegram on startup.
 
 ## Deployment
 
@@ -27,7 +27,7 @@ There is no CI/CD workflow in the repo. The app runs as a Docker Compose service
 
 ## Architecture
 
-- `MainBotClass` (`TelegramLongPollingBot`, annotated `@Service`) holds essentially all bot logic: command dispatch in `onUpdateReceived`, handlers, keyboards, and message sending. In `@PostConstruct init()` it registers itself (`registerBot(this)`) with `TelegramBotsApi` and sets the bot command menu via `SetMyCommands`. When adding a command, update the `if/else` dispatch in `handleCommand`, the `SetMyCommands` list, and the `/start` help text.
+- `MainBotClass` (`@Service`, implements telegrambots 10.x `LongPollingSingleThreadUpdateConsumer`) holds essentially all bot logic: command dispatch in `consume(Update)`, handlers, keyboards, and message sending. Updates are processed sequentially on one (daemon) thread. Outgoing calls go through `telegramClient` (`OkHttpTelegramClient`), which shares one `OkHttpClient` with the long-polling `TelegramBotsLongPollingApplication`. In `@PostConstruct init()` it registers itself (`botsApplication.registerBot(BOT_TOKEN, this)`; the session deletes any webhook itself) and sets the bot command menu via `SetMyCommands`; `@PreDestroy` closes the application. Telegram API objects are immutable-ish Lombok types: build them with constructors with required args or `builder()`, not no-arg constructors + setters. When adding a command, update the `if/else` dispatch in `handleCommand`, the `SetMyCommands` list, and the `/start` help text.
 - Conversation state is kept in-memory per chat (`Map<Long, BotState> userStates`, `Map<Long, String> userDates`) and is lost on restart. States in `enums/BotState` (`WAITING_WEIGHT`, `WAITING_TARGET_WEIGHT`, `WAITING_NEW_WEIGHT`) make the next non-command message be treated as the input value. Commands (`/...`) and reply-keyboard button texts are checked **first** and reset the state to `IDLE`, so a user can't get stuck. Weight input goes through `parseWeight` (accepts `,` or `.`, rejects non-finite/≤0/≥1000).
 - Reply-keyboard buttons ("Set weight", "Show data") are dispatched by matching message text. Inline buttons use `::`-separated callback data: `edit::<entryId>::<date>::<weight>` (parsed in both the callback handler and `setNewWeight`) and `chart::<ChartPeriod name>`.
 - Services live in package `serivce` (misspelled — keep it consistent): interfaces `UserDataService`, `ForecastService`, `ChartGenerator` with single implementations (`UserDataServiceImpl`, `ForecastSimpleExtrapolationServiceImpl` — linear extrapolation between first and last entry, `ChartGeneratorXChartImpl` — renders the PNG in memory and returns `byte[]`). The chart X axis is numeric epoch-day so spacing is proportional to time; period filtering (`enums/ChartPeriod`) happens in `MainBotClass` before calling the generator.

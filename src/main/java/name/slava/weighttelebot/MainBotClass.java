@@ -1,6 +1,8 @@
 package name.slava.weighttelebot;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import name.slava.weighttelebot.enums.BotState;
 import name.slava.weighttelebot.enums.ChartPeriod;
 import name.slava.weighttelebot.model.UserData;
@@ -8,27 +10,31 @@ import name.slava.weighttelebot.model.WeightEntry;
 import name.slava.weighttelebot.serivce.ChartGenerator;
 import name.slava.weighttelebot.serivce.ForecastService;
 import name.slava.weighttelebot.serivce.UserDataService;
+import okhttp3.OkHttpClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.telegram.telegrambots.bots.TelegramLongPollingBot;
-import org.telegram.telegrambots.meta.TelegramBotsApi;
+import org.telegram.telegrambots.client.okhttp.OkHttpTelegramClient;
+import org.telegram.telegrambots.longpolling.TelegramBotsLongPollingApplication;
+import org.telegram.telegrambots.longpolling.util.LongPollingSingleThreadUpdateConsumer;
+import org.telegram.telegrambots.longpolling.util.TelegramOkHttpClientFactory;
 import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
 import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.send.SendPhoto;
 import org.telegram.telegrambots.meta.api.objects.InputFile;
-import org.telegram.telegrambots.meta.api.objects.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.commands.BotCommand;
+import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboard;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardRow;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
-import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
+import org.telegram.telegrambots.meta.generics.TelegramClient;
 
 import java.io.ByteArrayInputStream;
 import java.time.LocalDate;
@@ -37,11 +43,9 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Service
-public class MainBotClass extends TelegramLongPollingBot {
+public class MainBotClass implements LongPollingSingleThreadUpdateConsumer {
     private static final Logger logger = LoggerFactory.getLogger(MainBotClass.class);
 
-    // Замените на свои значения (или берите из переменных окружения)
-    private static final String BOT_USERNAME = System.getenv("BOT_USERNAME");
     private static final String BOT_TOKEN = System.getenv("BOT_TOKEN");
 
     private static final String BUTTON_SET_WEIGHT = "Set weight";
@@ -56,22 +60,16 @@ public class MainBotClass extends TelegramLongPollingBot {
     private final ForecastService forecastService;
     private final ChartGenerator chartGenerator;
 
-    // Конструктор бота (можно оставить пустым, если всё нужное инициализируем статически)
+    // Один HTTP-клиент на получение апдейтов и на отправку сообщений: меньше потоков и соединений
+    private final OkHttpClient httpClient = new TelegramOkHttpClientFactory.DefaultOkHttpClientCreator().get();
+    private final TelegramClient telegramClient = new OkHttpTelegramClient(httpClient, BOT_TOKEN);
+    private final TelegramBotsLongPollingApplication botsApplication =
+            new TelegramBotsLongPollingApplication(ObjectMapper::new, () -> httpClient);
+
     public MainBotClass(UserDataService userDataService, ForecastService forecastService, ChartGenerator chartGenerator) {
-        super();
         this.userDataService = userDataService;
         this.forecastService = forecastService;
         this.chartGenerator = chartGenerator;
-    }
-
-    @Override
-    public String getBotUsername() {
-        return BOT_USERNAME;
-    }
-
-    @Override
-    public String getBotToken() {
-        return BOT_TOKEN;
     }
 
     /**
@@ -80,11 +78,11 @@ public class MainBotClass extends TelegramLongPollingBot {
     @PostConstruct
     public void init() {
         try {
-            TelegramBotsApi botsApi = new TelegramBotsApi(DefaultBotSession.class);
-            botsApi.registerBot(this);
+            // Сессия long polling сама удаляет webhook перед началом получения апдейтов
+            botsApplication.registerBot(BOT_TOKEN, this);
             logger.info("==============Bot started successfully!==============");
         } catch (TelegramApiException e) {
-            logger.error("Error while starting bot {}", e.getMessage());
+            logger.error("Error while starting bot", e);
         }
         List<BotCommand> commands = List.of(
                 new BotCommand("/start", "Начать работу"),
@@ -94,13 +92,20 @@ public class MainBotClass extends TelegramLongPollingBot {
                 new BotCommand("/forecast", "Получить прогноз"),
                 new BotCommand("/chart", "Получить график")
         );
-        SetMyCommands setMyCommands = new SetMyCommands();
-        setMyCommands.setCommands(commands);
         try{
-            execute(setMyCommands);
+            telegramClient.execute(new SetMyCommands(commands));
             logger.info("Commands set successfully");
         } catch (TelegramApiException e) {
             logger.error("Error while setting commands: {}", e.getMessage());
+        }
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        try {
+            botsApplication.close();
+        } catch (Exception e) {
+            logger.error("Error while stopping bot: {}", e.getMessage());
         }
     }
 
@@ -108,7 +113,7 @@ public class MainBotClass extends TelegramLongPollingBot {
      * Главный метод, который вызывается при каждом обновлении (входящем сообщении) от Telegram.
      */
     @Override
-    public void onUpdateReceived(Update update) {
+    public void consume(Update update) {
 
         // Проверяем, что апдейт содержит сообщение
         if (update.hasMessage()) {
@@ -252,18 +257,13 @@ public class MainBotClass extends TelegramLongPollingBot {
             sendTextMessage(chatId, "Нет данных для редактирования.");
             return;
         }
-        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
-        lastWeightEntries.forEach(entry -> {
-            List<InlineKeyboardButton> row = new ArrayList<>();
-            InlineKeyboardButton button = new InlineKeyboardButton();
-            button.setText(entry.getDate() +  " -> " + entry.getWeight());
-            button.setCallbackData("edit::" + entry.getId() + "::" + entry.getDate() + "::" + entry.getWeight());
-            row.add(button);
-            rows.add(row);
-        });
+        List<InlineKeyboardRow> rows = new ArrayList<>();
+        lastWeightEntries.forEach(entry -> rows.add(new InlineKeyboardRow(InlineKeyboardButton.builder()
+                .text(entry.getDate() + " -> " + entry.getWeight())
+                .callbackData("edit::" + entry.getId() + "::" + entry.getDate() + "::" + entry.getWeight())
+                .build())));
 
-        InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup();
-        inlineKeyboardMarkup.setKeyboard(rows);
+        InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup(rows);
 
         sendTextMessage(chatId, "Выберите запись для редактирования:", inlineKeyboardMarkup);
 
@@ -290,16 +290,7 @@ public class MainBotClass extends TelegramLongPollingBot {
      * Отправка текстового сообщения пользователю.
      */
     private void sendTextMessage(long chatId, String text) {
-        SendMessage message = new SendMessage();
-        message.setChatId(String.valueOf(chatId));
-        message.setText(text);
-        message.setReplyMarkup(getReplyButtons(chatId));
-//        message.setReplyMarkup(getInlineButtons(chatId));
-        try {
-            execute(message);
-        } catch (TelegramApiException e) {
-            logger.error("Error while sending message: {}", e.getMessage());
-        }
+        sendTextMessage(chatId, text, getReplyButtons(chatId));
     }
 
     /**
@@ -322,56 +313,29 @@ public class MainBotClass extends TelegramLongPollingBot {
     }
 
     private void sendTextMessage(long chatId, String text, ReplyKeyboard replyKeyboard) {
-        SendMessage message = new SendMessage();
-        message.setChatId(String.valueOf(chatId));
-        message.setText(text);
-        message.setReplyMarkup(replyKeyboard);
+        SendMessage message = SendMessage.builder()
+                .chatId(chatId)
+                .text(text)
+                .replyMarkup(replyKeyboard)
+                .build();
         try {
-            execute(message);
+            telegramClient.execute(message);
         } catch (TelegramApiException e) {
             logger.error("Error while sending message: {}", e.getMessage());
         }
     }
 
-    private ReplyKeyboard getInlineButtons(long chatId) {
-        // Создаём кнопку
-        InlineKeyboardButton button = new InlineKeyboardButton();
-        button.setText("Нажми меня!");
-        button.setCallbackData("BUTTON_HELLO_CALLBACK");
-
-        // Один ряд кнопок
-        List<InlineKeyboardButton> row = new ArrayList<>();
-        row.add(button);
-
-        // Список рядов (каждый ряд – список кнопок)
-        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
-        rows.add(row);
-
-        // Создаём объект разметки
-        InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup();
-        inlineKeyboardMarkup.setKeyboard(rows);
-        return inlineKeyboardMarkup;
-    }
-
-
     private ReplyKeyboard getReplyButtons(long chatId) {
-        // Создаём объект клавиатуры
-        ReplyKeyboardMarkup keyboardMarkup = new ReplyKeyboardMarkup();
-        keyboardMarkup.setResizeKeyboard(true); // Клавиатура будет подстраиваться по высоте
-        keyboardMarkup.setSelective(true); // Отображать клавиатуру только нужным пользователям (в группах)
-
         // Создаём кнопки
         KeyboardRow row1 = new KeyboardRow();
         row1.add(new KeyboardButton(BUTTON_SET_WEIGHT));
         row1.add(new KeyboardButton(BUTTON_SHOW_DATA));
 
-        // Собираем список строк
-        List<KeyboardRow> keyboardRows = new ArrayList<>();
-        keyboardRows.add(row1);
-
-        // Устанавливаем клавиатуру
-        keyboardMarkup.setKeyboard(keyboardRows);
-        return keyboardMarkup;
+        return ReplyKeyboardMarkup.builder()
+                .keyboard(List.of(row1))
+                .resizeKeyboard(true) // Клавиатура будет подстраиваться по высоте
+                .selective(true) // Отображать клавиатуру только нужным пользователям (в группах)
+                .build();
     }
 
     // --------------------------------
@@ -494,18 +458,17 @@ public class MainBotClass extends TelegramLongPollingBot {
     }
 
     private InlineKeyboardMarkup getChartPeriodButtons() {
-        List<InlineKeyboardButton> row1 = new ArrayList<>();
-        List<InlineKeyboardButton> row2 = new ArrayList<>();
+        InlineKeyboardRow row1 = new InlineKeyboardRow();
+        InlineKeyboardRow row2 = new InlineKeyboardRow();
         for (ChartPeriod period : ChartPeriod.values()) {
-            InlineKeyboardButton button = new InlineKeyboardButton();
-            button.setText(period.getLabel());
-            button.setCallbackData("chart::" + period.name());
+            InlineKeyboardButton button = InlineKeyboardButton.builder()
+                    .text(period.getLabel())
+                    .callbackData("chart::" + period.name())
+                    .build();
             (row1.size() < 2 ? row1 : row2).add(button);
         }
 
-        InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup();
-        inlineKeyboardMarkup.setKeyboard(List.of(row1, row2));
-        return inlineKeyboardMarkup;
+        return new InlineKeyboardMarkup(List.of(row1, row2));
     }
 
     private void handleChartPeriod(long chatId, String periodName) {
@@ -542,14 +505,15 @@ public class MainBotClass extends TelegramLongPollingBot {
         }
 
         // Отправляем фото
-        SendPhoto sendPhoto = new SendPhoto();
-        sendPhoto.setChatId(String.valueOf(chatId));
-        sendPhoto.setPhoto(new InputFile(new ByteArrayInputStream(chart), "weight_chart.png"));
-        sendPhoto.setCaption("График веса: " + period.getLabel());
-        sendPhoto.setReplyMarkup(getChartPeriodButtons());
+        SendPhoto sendPhoto = SendPhoto.builder()
+                .chatId(chatId)
+                .photo(new InputFile(new ByteArrayInputStream(chart), "weight_chart.png"))
+                .caption("График веса: " + period.getLabel())
+                .replyMarkup(getChartPeriodButtons())
+                .build();
 
         try {
-            execute(sendPhoto);
+            telegramClient.execute(sendPhoto);
         } catch (TelegramApiException e) {
             logger.error("Error while sending chart: {}", e.getMessage());
             sendTextMessage(chatId, "Ошибка при отправке графика.");
@@ -558,7 +522,7 @@ public class MainBotClass extends TelegramLongPollingBot {
 
     private void answerCallbackQuery(String callbackQueryId) {
         try {
-            execute(new AnswerCallbackQuery(callbackQueryId));
+            telegramClient.execute(new AnswerCallbackQuery(callbackQueryId));
         } catch (TelegramApiException e) {
             logger.error("Error while answering callback query: {}", e.getMessage());
         }
