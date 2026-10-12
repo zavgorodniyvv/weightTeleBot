@@ -14,7 +14,7 @@ mvn test                                # run tests
 mvn test -Dtest=WeightTeleBotApplicationTests              # single test class
 mvn test -Dtest=WeightTeleBotApplicationTests#contextLoads   # single test method
 mvn spring-boot:run                     # run locally
-docker build -t weighttelebot . && docker run -e BOT_USERNAME=... -e BOT_TOKEN=... -e MONGODB_URI=... -p 10000:10000 weighttelebot
+docker build -t weighttelebot . && docker run -e BOT_USERNAME=... -e BOT_TOKEN=... -e MONGODB_URI=... weighttelebot
 ```
 
 `mvnw` is committed but `.mvn/wrapper/` is not, so the wrapper does not work — use a system `mvn`.
@@ -23,7 +23,7 @@ Required environment variables: `BOT_USERNAME`, `BOT_TOKEN` (read directly via `
 
 ## Deployment
 
-There is no CI/CD workflow. The app is shipped as the multi-stage `Dockerfile` (runtime image is `eclipse-temurin:21-jre`, memory-saving JVM flags are set via `JAVA_TOOL_OPTIONS`). There is no `spring-boot-starter-web`/Tomcat (removed to save RAM) — `HealthServer` runs the JDK built-in `HttpServer` on `server.port` (10000) and answers `200 OK` on any path, for hosting health checks. Since the app is not a web app, `spring.main.keep-alive=true` keeps the JVM running.
+There is no CI/CD workflow in the repo. The app runs as a Docker Compose service on a home server, which pulls `master` and rebuilds the multi-stage `Dockerfile` itself (runtime image is `eclipse-temurin:21-jre`, memory-saving JVM flags are set via `JAVA_TOOL_OPTIONS`). The app is not a web app and opens no ports (no `spring-boot-starter-web`, removed to save RAM); `spring.main.keep-alive=true` keeps the JVM running.
 
 ## Architecture
 

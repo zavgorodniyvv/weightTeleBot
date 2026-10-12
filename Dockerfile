@@ -35,6 +35,5 @@ COPY --from=build /app/target/*.jar /app/bot.jar
 #  - ExitOnOutOfMemoryError: при нехватке памяти процесс завершается, а не зависает (перезапуск — на стороне хостинга)
 ENV JAVA_TOOL_OPTIONS="-XX:+UseSerialGC -Xss512k -XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=32m -XX:+ExitOnOutOfMemoryError"
 
-EXPOSE 10000
 # Запускаем бот
 ENTRYPOINT ["java", "-jar", "/app/bot.jar"]
