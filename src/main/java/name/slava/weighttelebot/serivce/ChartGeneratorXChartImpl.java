@@ -11,7 +11,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-import java.io.File;
 import java.io.IOException;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -20,14 +19,14 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * Генерирует PNG-файл с графиком и возвращает его путь.
+ * Генерирует PNG-картинку с графиком в памяти.
  */
 @Service
 public class ChartGeneratorXChartImpl implements ChartGenerator {
     private static final Logger logger = LoggerFactory.getLogger(ChartGeneratorXChartImpl.class);
 
     @Override
-    public File generateChart(List<WeightEntry> weightEntries, LocalDate from, LocalDate to) {
+    public byte[] generateChart(List<WeightEntry> weightEntries, LocalDate from, LocalDate to) {
         logger.info("Generating chart for {} entries", weightEntries.size());
         try {
             // Сортируем по дате
@@ -53,8 +52,8 @@ public class ChartGeneratorXChartImpl implements ChartGenerator {
                     .yAxisTitle("Weight (kg)")
                     .build();
 
-            chart.getStyler().setAxisTitleFont(new java.awt.Font("Arial", java.awt.Font.PLAIN, 16));
-            chart.getStyler().setAxisTickLabelsFont(new java.awt.Font("Arial", java.awt.Font.PLAIN, 12));
+            chart.getStyler().setAxisTitleFont(new java.awt.Font(java.awt.Font.SANS_SERIF, java.awt.Font.PLAIN, 16));
+            chart.getStyler().setAxisTickLabelsFont(new java.awt.Font(java.awt.Font.SANS_SERIF, java.awt.Font.PLAIN, 12));
             chart.getStyler().setXAxisLabelRotation(45); // Повернуть подписи дат для читаемости
             chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
 
@@ -75,11 +74,7 @@ public class ChartGeneratorXChartImpl implements ChartGenerator {
                 return LocalDate.ofEpochDay((long) day).format(formatter);
             });
 
-            // Сохраняем во временный файл
-            File file = File.createTempFile("weight_chart_", ".png");
-            BitmapEncoder.saveBitmap(chart, file.getAbsolutePath(), BitmapEncoder.BitmapFormat.PNG);
-
-            return file;
+            return BitmapEncoder.getBitmapBytes(chart, BitmapEncoder.BitmapFormat.PNG);
         } catch (IOException e) {
             logger.error("Error while generating chart: {}", e.getMessage());
             return null;
