@@ -15,7 +15,7 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * Минимальный HTTP-сервер на встроенном в JDK HttpServer.
- * Нужен только для того, чтобы Render видел открытый порт (вместо Tomcat из spring-boot-starter-web).
+ * Держит открытый HTTP-порт для health check хостинга (вместо Tomcat из spring-boot-starter-web).
  */
 @Component
 public class HealthServer {

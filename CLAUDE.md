@@ -23,7 +23,7 @@ Required environment variables: `BOT_USERNAME`, `BOT_TOKEN` (read directly via `
 
 ## Deployment
 
-Pushing to `master` triggers `.github/workflows/render-deploy.yml`, which calls the Render deploy hook from the `RENDER_DEPLOY_HOOK` GitHub secret; Render builds the multi-stage `Dockerfile` (runtime image is `eclipse-temurin:21-jre`, memory-saving JVM flags are set via `JAVA_TOOL_OPTIONS`). Render needs an open HTTP port: there is no `spring-boot-starter-web`/Tomcat (removed to save RAM) — `HealthServer` runs the JDK built-in `HttpServer` on `server.port` (10000) and answers `200 OK` on any path. Since the app is not a web app, `spring.main.keep-alive=true` keeps the JVM running.
+There is no CI/CD workflow. The app is shipped as the multi-stage `Dockerfile` (runtime image is `eclipse-temurin:21-jre`, memory-saving JVM flags are set via `JAVA_TOOL_OPTIONS`). There is no `spring-boot-starter-web`/Tomcat (removed to save RAM) — `HealthServer` runs the JDK built-in `HttpServer` on `server.port` (10000) and answers `200 OK` on any path, for hosting health checks. Since the app is not a web app, `spring.main.keep-alive=true` keeps the JVM running.
 
 ## Architecture
 

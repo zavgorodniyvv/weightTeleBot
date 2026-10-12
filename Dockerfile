@@ -25,14 +25,14 @@ WORKDIR /app
 # Копируем jar из предыдущего этапа
 COPY --from=build /app/target/*.jar /app/bot.jar
 
-# Переменные BOT_USERNAME, BOT_TOKEN, MONGODB_URI задаются на этапе "docker run" / в Render.
+# Переменные BOT_USERNAME, BOT_TOKEN, MONGODB_URI задаются на этапе "docker run".
 # Значений по умолчанию нет намеренно: без них бот должен падать явно.
 
 # Настройки JVM для экономии памяти:
 #  - SerialGC: самый экономный сборщик мусора для одного маленького процесса
 #  - Xss512k: стеки потоков вдвое меньше стандартных
 #  - TieredStopAtLevel=1 + ReservedCodeCacheSize: только быстрый JIT C1, меньше кэш кода и потоков компилятора
-#  - ExitOnOutOfMemoryError: при нехватке памяти процесс завершается, и Render его перезапускает
+#  - ExitOnOutOfMemoryError: при нехватке памяти процесс завершается, а не зависает (перезапуск — на стороне хостинга)
 ENV JAVA_TOOL_OPTIONS="-XX:+UseSerialGC -Xss512k -XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=32m -XX:+ExitOnOutOfMemoryError"
 
 EXPOSE 10000
