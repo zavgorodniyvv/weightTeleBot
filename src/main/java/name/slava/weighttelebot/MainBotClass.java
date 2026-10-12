@@ -30,10 +30,11 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.Keyboard
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
 
-import java.io.File;
+import java.io.ByteArrayInputStream;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class MainBotClass extends TelegramLongPollingBot {
@@ -43,8 +44,13 @@ public class MainBotClass extends TelegramLongPollingBot {
     private static final String BOT_USERNAME = System.getenv("BOT_USERNAME");
     private static final String BOT_TOKEN = System.getenv("BOT_TOKEN");
 
-    private final Map<Long, BotState> userStates = new HashMap<>();
-    private final Map<Long, String> userDates = new HashMap<>();
+    private static final String BUTTON_SET_WEIGHT = "Set weight";
+    private static final String BUTTON_SHOW_DATA = "Show data";
+    private static final int MAX_MESSAGE_LENGTH = 4096;
+    private static final double MAX_WEIGHT = 1000;
+
+    private final Map<Long, BotState> userStates = new ConcurrentHashMap<>();
+    private final Map<Long, String> userDates = new ConcurrentHashMap<>();
 
     private final UserDataService userDataService;
     private final ForecastService forecastService;
@@ -75,7 +81,7 @@ public class MainBotClass extends TelegramLongPollingBot {
     public void init() {
         try {
             TelegramBotsApi botsApi = new TelegramBotsApi(DefaultBotSession.class);
-            botsApi.registerBot(new MainBotClass(userDataService, forecastService, chartGenerator));
+            botsApi.registerBot(this);
             logger.info("==============Bot started successfully!==============");
         } catch (TelegramApiException e) {
             logger.error("Error while starting bot {}", e.getMessage());
@@ -107,52 +113,32 @@ public class MainBotClass extends TelegramLongPollingBot {
         // Проверяем, что апдейт содержит сообщение
         if (update.hasMessage()) {
             Message message = update.getMessage();
+            // id чата (или пользователя)
+            long chatId = message.getChatId();
+            String text = message.hasText() ? message.getText().trim() : null;
 
-            var userState = userStates.getOrDefault(message.getChatId(), BotState.IDLE);
-
-            if(userState == BotState.WAITING_WEIGHT){
-                handleSetWeightOnButtonClick(message.getChatId(), message.getText());
-                return;
-            }
-            if (userState == BotState.WAITING_TARGET_WEIGHT) {
-                setTargetWeight(message.getChatId(), message.getText());
-                return;
-            }
-            if(userState == BotState.WAITING_NEW_WEIGHT){
-                setNewWeight(message);
+            // Команды и кнопки клавиатуры работают всегда и сбрасывают ожидание ввода,
+            // чтобы пользователь не застревал в режиме ввода веса
+            if (text != null && isCommand(text)) {
+                userStates.put(chatId, BotState.IDLE);
+                handleCommand(chatId, text);
                 return;
             }
 
-            // Проверяем, что это текст
-            if (message.hasText()) {
-                // Текст сообщения
-                String text = message.getText();
-                // id чата (или пользователя)
-                long chatId = message.getChatId();
+            var userState = userStates.getOrDefault(chatId, BotState.IDLE);
+            if (userState != BotState.IDLE && text == null) {
+                sendTextMessage(chatId, "Ожидается число. Пример: 75.3");
+                return;
+            }
 
-                // Обрабатываем команды
-                if (text.startsWith("/start")) {
-                    handleStartCommand(chatId);
-                } else if (text.startsWith("/setweight")) {
-                    handleSetWeight(chatId, text);
-                } else if (text.startsWith("/settarget")) {
-                    handleSetTarget(chatId, text);
-                } else if (text.startsWith("/showdata")) {
-                    handleShowData(chatId);
-                } else if (text.startsWith("/editdata")) {
-                    handleEditData(chatId);
-                } else if (text.startsWith("/forecast")) {
-                    handleForecast(chatId);
-                } else if (text.startsWith("/chart")) {
-                    handleChart(chatId);
-                } else if (text.startsWith("Show data")) {
-                    handleShowData(chatId);
-                } else if (text.startsWith("Set weight")) {
-                    userStates.put(chatId, BotState.WAITING_WEIGHT);
-                    sendTextMessage(chatId, "Введите ваш вес:");
-                } else {
-                    // Если нужно - обрабатываем произвольный текст
-                    sendTextMessage(chatId, "Неизвестная команда. Попробуйте /start");
+            switch (userState) {
+                case WAITING_WEIGHT -> handleSetWeightOnButtonClick(chatId, text);
+                case WAITING_TARGET_WEIGHT -> setTargetWeight(chatId, text);
+                case WAITING_NEW_WEIGHT -> setNewWeight(chatId, text);
+                case IDLE -> {
+                    if (text != null) {
+                        sendTextMessage(chatId, "Неизвестная команда. Попробуйте /start");
+                    }
                 }
             }
         }
@@ -175,24 +161,57 @@ public class MainBotClass extends TelegramLongPollingBot {
         // Можно также проверять наличие CallbackQuery (кнопок), фото и т.д., если нужно.
     }
 
-    private void setNewWeight(Message message) {
-        var chatId = message.getChatId();
-        String text;
-        if(message.hasText()) {
-            text = message.getText();
-        } else {
-            sendTextMessage(chatId, "Некорректный формат. Пример: 75.3");
-            return;
-        }
+    private boolean isCommand(String text) {
+        return text.startsWith("/") || text.equals(BUTTON_SET_WEIGHT) || text.equals(BUTTON_SHOW_DATA);
+    }
 
+    private void handleCommand(long chatId, String text) {
+        if (text.startsWith("/start")) {
+            handleStartCommand(chatId);
+        } else if (text.startsWith("/setweight")) {
+            handleSetWeight(chatId, text);
+        } else if (text.startsWith("/settarget")) {
+            handleSetTarget(chatId, text);
+        } else if (text.startsWith("/showdata") || text.equals(BUTTON_SHOW_DATA)) {
+            handleShowData(chatId);
+        } else if (text.startsWith("/editdata")) {
+            handleEditData(chatId);
+        } else if (text.startsWith("/forecast")) {
+            handleForecast(chatId);
+        } else if (text.startsWith("/chart")) {
+            handleChart(chatId);
+        } else if (text.equals(BUTTON_SET_WEIGHT)) {
+            userStates.put(chatId, BotState.WAITING_WEIGHT);
+            sendTextMessage(chatId, "Введите ваш вес:");
+        } else {
+            sendTextMessage(chatId, "Неизвестная команда. Попробуйте /start");
+        }
+    }
+
+    /**
+     * Разбирает вес из текста пользователя. Принимает и точку, и запятую: "75.3", "75,3".
+     */
+    private static double parseWeight(String text) {
+        double weight = Double.parseDouble(text.trim().replace(',', '.'));
+        if (!Double.isFinite(weight) || weight <= 0 || weight >= MAX_WEIGHT) {
+            throw new NumberFormatException("Invalid weight: " + text);
+        }
+        return weight;
+    }
+
+    private void setNewWeight(long chatId, String text) {
         try {
-            double weight = Double.parseDouble(text);
+            double weight = parseWeight(text);
             UserData userData = userDataService.get(chatId);
             if(userData == null){
                 sendTextMessage(chatId, "Нет данных для редактирования.");
                 return;
             }
             String data = userDates.get(chatId);
+            if (data == null) {
+                sendTextMessage(chatId, "Запись для редактирования не выбрана. Попробуйте /editdata");
+                return;
+            }
             var dataParts = data.split("::");
 
             String localDate = dataParts[2];
@@ -252,7 +271,7 @@ public class MainBotClass extends TelegramLongPollingBot {
 
     private void handleSetWeightOnButtonClick(Long chatId, String text) {
         try{
-            double weight = Double.parseDouble(text);
+            double weight = parseWeight(text);
 
             UserData data = userDataService.getOrDefault(chatId, new UserData());
             data.getWeights().add(new WeightEntry(LocalDate.now(), weight));
@@ -280,6 +299,25 @@ public class MainBotClass extends TelegramLongPollingBot {
             execute(message);
         } catch (TelegramApiException e) {
             logger.error("Error while sending message: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Отправка длинного текста несколькими сообщениями: Telegram ограничивает сообщение 4096 символами.
+     * Текст режется по переводам строк.
+     */
+    private void sendLongTextMessage(long chatId, String text) {
+        int start = 0;
+        while (text.length() - start > MAX_MESSAGE_LENGTH) {
+            int end = text.lastIndexOf('\n', start + MAX_MESSAGE_LENGTH - 1);
+            if (end <= start) {
+                end = start + MAX_MESSAGE_LENGTH - 1;
+            }
+            sendTextMessage(chatId, text.substring(start, end + 1));
+            start = end + 1;
+        }
+        if (!text.substring(start).isBlank()) {
+            sendTextMessage(chatId, text.substring(start));
         }
     }
 
@@ -324,8 +362,8 @@ public class MainBotClass extends TelegramLongPollingBot {
 
         // Создаём кнопки
         KeyboardRow row1 = new KeyboardRow();
-        row1.add(new KeyboardButton("Set weight"));
-        row1.add(new KeyboardButton("Show data"));
+        row1.add(new KeyboardButton(BUTTON_SET_WEIGHT));
+        row1.add(new KeyboardButton(BUTTON_SHOW_DATA));
 
         // Собираем список строк
         List<KeyboardRow> keyboardRows = new ArrayList<>();
@@ -365,7 +403,7 @@ public class MainBotClass extends TelegramLongPollingBot {
             return;
         }
         try {
-            double weight = Double.parseDouble(parts[1]);
+            double weight = parseWeight(parts[1]);
 
             // Получаем или создаём UserData
             UserData data = userDataService.getOrDefault(chatId, new UserData());
@@ -394,7 +432,7 @@ public class MainBotClass extends TelegramLongPollingBot {
 
     private void setTargetWeight(long chatId, String weight) {
         try {
-            double target = Double.parseDouble(weight);
+            double target = parseWeight(weight);
             UserData data = userDataService.getOrDefault(chatId, new UserData());
             data.setTargetWeight(target);
             userDataService.put(chatId, data);
@@ -427,7 +465,7 @@ public class MainBotClass extends TelegramLongPollingBot {
         if (data.getTargetWeight() != null) {
             sb.append("\nЦелевой вес: ").append(data.getTargetWeight()).append(" кг\n");
         }
-        sendTextMessage(chatId, sb.toString());
+        sendLongTextMessage(chatId, sb.toString());
     }
 
     private void handleForecast(long chatId) {
@@ -444,7 +482,7 @@ public class MainBotClass extends TelegramLongPollingBot {
 
         LocalDate forecastDate = calculateForecast(data.getWeights(), data.getTargetWeight());
         if (forecastDate == null) {
-            sendTextMessage(chatId, "Невозможно вычислить прогноз, проверьте данные.");
+            sendTextMessage(chatId, "Невозможно вычислить прогноз: вес не меняется или движется в сторону от цели.");
         } else {
             DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd.MM.yyyy");
             sendTextMessage(chatId, "Прогнозируемая дата достижения цели: " + formatter.format(forecastDate));
@@ -497,8 +535,8 @@ public class MainBotClass extends TelegramLongPollingBot {
         }
 
         // Генерируем картинку
-        File chartFile = generateChart(entries, from, from == null ? null : today);
-        if (chartFile == null) {
+        byte[] chart = generateChart(entries, from, from == null ? null : today);
+        if (chart == null) {
             sendTextMessage(chatId, "Ошибка при генерации графика.");
             return;
         }
@@ -506,7 +544,7 @@ public class MainBotClass extends TelegramLongPollingBot {
         // Отправляем фото
         SendPhoto sendPhoto = new SendPhoto();
         sendPhoto.setChatId(String.valueOf(chatId));
-        sendPhoto.setPhoto(new InputFile(chartFile));
+        sendPhoto.setPhoto(new InputFile(new ByteArrayInputStream(chart), "weight_chart.png"));
         sendPhoto.setCaption("График веса: " + period.getLabel());
         sendPhoto.setReplyMarkup(getChartPeriodButtons());
 
@@ -515,11 +553,6 @@ public class MainBotClass extends TelegramLongPollingBot {
         } catch (TelegramApiException e) {
             logger.error("Error while sending chart: {}", e.getMessage());
             sendTextMessage(chatId, "Ошибка при отправке графика.");
-        } finally {
-            // Удалим временный файл (чтобы не копились)
-            if (chartFile.exists()) {
-                chartFile.delete();
-            }
         }
     }
 
@@ -543,9 +576,9 @@ public class MainBotClass extends TelegramLongPollingBot {
     // Генерация графика (через XChart)
     // --------------------------------
     /**
-     * Генерирует PNG-файл с графиком и возвращает путь к нему.
+     * Генерирует PNG-картинку с графиком.
      */
-    private File generateChart(List<WeightEntry> weightEntries, LocalDate from, LocalDate to) {
+    private byte[] generateChart(List<WeightEntry> weightEntries, LocalDate from, LocalDate to) {
         return chartGenerator.generateChart(weightEntries, from, to);
     }
 

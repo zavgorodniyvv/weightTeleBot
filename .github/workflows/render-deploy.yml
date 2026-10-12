@@ -3,18 +3,18 @@ name: Deploy to Render
 on:
   push:
     branches:
-      - master  # Change to "main" if needed
+      - master
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-
       - name: Trigger Render Deploy Hook
+        env:
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
         run: |
-          curl -X GET https://api.render.com/deploy/srv-cuhssfaj1k6c73fdktd0?key=fASpehKKPlw
-
-    env:
-      RENDER_DEPLOY_HOOK: https://api.render.com/deploy/srv-cuhssfaj1k6c73fdktd0?key=fASpehKKPlw
+          if [ -z "$RENDER_DEPLOY_HOOK" ]; then
+            echo "Secret RENDER_DEPLOY_HOOK is not set" >&2
+            exit 1
+          fi
+          curl -fsS "$RENDER_DEPLOY_HOOK"

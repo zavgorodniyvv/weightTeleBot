@@ -56,12 +56,14 @@ public class ForecastSimpleExtrapolationServiceImpl implements ForecastService {
         // Approximate number of days to reach the target
         double daysToTarget = diffToTarget / dailyChange;
 
+        // Weight is moving away from the target (e.g. dailyChange is positive, but we need to lose weight) -
+        // the forecast would be a date in the past
+        if (daysToTarget < 0) {
+            return null;
+        }
+
         // Round to whole numbers, but can be more precise
         long daysRounded = Math.round(daysToTarget);
-
-        // If the calculation shows that we will go back (for example, dailyChange is positive, but we need to lose weight),
-        // then daysRounded may come out negative. You can add a check if needed.
-        // But for now, leave it as is.
 
         // Forecast - from the last date:
         return last.getDate().plusDays(daysRounded);
